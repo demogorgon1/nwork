@@ -3,53 +3,13 @@
 #include <random>
 #include <unordered_set>
 
-#include <nwork/Queue.h>
-#include <nwork/Object.h>
+#include <nwork/API.h>
 
 namespace nwork_test
 {
 
 	namespace 
-	{
-
-		class WorkerThreads
-		{
-		public:
-			WorkerThreads(
-				nwork::Queue*		aWorkQueue,
-				size_t				aNumThreads)
-			{
-				for(size_t i = 0; i < aNumThreads; i++)
-				{
-					std::unique_ptr<std::thread> t = std::make_unique<std::thread>([&, aWorkQueue]()
-					{
-						while(!m_stop)
-						{
-							aWorkQueue->WaitAndExecute(100);
-
-							std::this_thread::yield();
-						}
-					});
-
-					m_threads.push_back(std::move(t));
-				}
-			}
-
-			~WorkerThreads()
-			{
-				m_stop = true;
-
-				for(std::unique_ptr<std::thread>& t : m_threads)
-				{
-					t->join();
-					t.reset();
-				}
-			}
-
-			// Public data
-			std::vector<std::unique_ptr<std::thread>>	m_threads;
-			std::atomic_bool							m_stop = false;
-		};
+	{	
 
 		void
 		_MakeRandomRange(
@@ -227,7 +187,7 @@ namespace nwork_test
 	{
 		{
 			nwork::Queue workQueue;
-			WorkerThreads workerThreads(&workQueue, 8);
+			nwork::ThreadPool threadPool(&workQueue, 8);
 			std::mt19937 random(1234);
 
 			// Test ForEachInRange and ForEachVector
