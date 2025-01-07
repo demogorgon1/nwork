@@ -1,0 +1,31 @@
+﻿{
+  "configurations": [
+    {
+      "name": "WSL-Clang-Debug",
+      "generator": "Ninja",
+      "configurationType": "Debug",
+      "buildRoot": "${projectDir}\\build-linux\\build\\${name}",
+      "installRoot": "${projectDir}\\build-linux\\install\\${name}",
+      "cmakeExecutable": "cmake",
+      "cmakeCommandArgs": "-DNWORK_PRECOMPILED_HEADERS=ON -DNWORK_DISABLE_WARNING_CLASS_MEMACCESS=OFF",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "linux_clang_x64" ],
+      "wslPath": "${defaultWSLPath}"
+    },
+    {
+      "name": "WSL-Clang-Release",
+      "generator": "Ninja",
+      "configurationType": "RelWithDebInfo",
+      "buildRoot": "${projectDir}\\build-linux\\build\\${name}",
+      "installRoot": "${projectDir}\\build-linux\\install\\${name}",
+      "cmakeExecutable": "cmake",
+      "cmakeCommandArgs": "-DNWORK_PRECOMPILED_HEADERS=ON -DNWORK_DISABLE_WARNING_CLASS_MEMACCESS=OFF",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "linux_clang_x64" ],
+      "wslPath": "${defaultWSLPath}",
+      "variables": []
+    }
+  ]
+}

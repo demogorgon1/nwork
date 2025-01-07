@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Work.h"
+#include "Object.h"
 
 namespace nwork
 {
@@ -17,12 +17,20 @@ namespace nwork
 
 		enum Type : uint32_t
 		{
-			TYPE_FOR_EACH_VECTOR
+			TYPE_FOR_EACH_VECTOR			= 0x00000000,
+			TYPE_FOR_EACH_IN_RANGE			= 0x10000000,
+			TYPE_FUNCTION					= 0x20000000,
+			TYPE_OBJECT						= 0x30000000
 		};
 
 		enum ForEachVectorFlag : uint32_t
 		{
-			FOR_EACH_VECTOR_FLAG_LAST = 0x4
+			FOR_EACH_VECTOR_FLAG_REMAINDER	= 0x40000000
+		};
+
+		enum FunctionFlag : uint32_t
+		{
+			FUNCTION_FLAG_DELETE			= 0x40000000
 		};
 
 		struct Packet
@@ -31,74 +39,117 @@ namespace nwork
 			void*			m_pointer1 = NULL;
 			void*			m_pointer2 = NULL;
 		};
+		
+		typedef std::function<void(uint32_t, void*)> IOFunction;
 
-		static const uint32_t
+		static uint32_t
 		MakeHeader(
-			Type										aType,
-			uint32_t									aFlags,
-			uint32_t									aSize = UINT32_MAX)
+			Type															aType,
+			uint32_t														aFlags,
+			uint32_t														aSize = UINT32_MAX)
 		{
 			if(aSize != UINT32_MAX)
 			{
-				assert(aSize < 0xFFFFFF00);
+				assert(aSize < 0x0FFFFFFF);
 				return aSize;
 			}
-			return 0xFFFFFF00 | (uint32_t)aType | aFlags;
+			return 0x0FFFFFFF | aType | aFlags;
 		}
 
-								Queue(
-									size_t				aConcurrency);
+
+								Queue();
 								~Queue();
 
+		void					SetForEachConcurrency(
+									size_t									aForEachConcurrency);
+		void					SetIOFunction(
+									IOFunction								aIOFunction);
 		void					PostPacket(
-									const Packet&		aPacket);
+									const Packet&							aPacket);
 		WaitResult				WaitAndExecute(
-									uint32_t			aMaxWaitTime);
+									uint32_t								aMaxWaitTime);
+		void					BlockingForEachInRange(
+									int32_t									aMin,
+									int32_t									aMax,
+									std::function<void(int32_t)>			aFunction);
+		void					PostFunction(
+									std::function<void()>					aFunction);
+		void					PostFunctionWithSemaphore(
+									std::counting_semaphore<>*				aSemaphore,
+									std::function<void()>					aFunction);
+		void					PostFunctionPointer(
+									std::function<void()>*					aFunction);
+		void					PostFunctionPointerWithSemaphore(
+									std::counting_semaphore<>*				aSemaphore,
+									std::function<void()>*					aFunction);
+		void					PostObject(
+									Object*									aObject);
 
 		template <typename _T>
 		void
 		BlockingForEachVector(
-			const std::vector<_T>&				aVector,
-			std::function<void(const _T&)>		aFunction)
+			const std::vector<_T>&											aVector,
+			std::function<void(const _T&)>									aFunction)
 		{
 			if(aVector.empty())
 				return;
 
-			size_t itemsPerWork = aVector.size() / m_concurrency;
-			if(itemsPerWork == 0)
-				itemsPerWork = 1;
+			std::counting_semaphore<> semaphore(0); 
 
-			size_t workCount = aVector.size() / itemsPerWork;
-			size_t workIndex = 0;
-
-			ForEachContext context;
+			ForEachVectorContext context;
 			context.m_itemSize = sizeof(_T);
 			context.m_function = (std::function<void(const DummyClass&)>*)&aFunction;
-			context.m_itemCountPerWork = itemsPerWork;
-			context.m_itemCountPerWorkLast = (itemsPerWork * workCount) % aVector.size();
+			context.m_semaphore = &semaphore;
+			context.m_itemCountPerWork = aVector.size() / m_forEachConcurrency;
+			
+			if(context.m_itemCountPerWork == 0)
+				context.m_itemCountPerWork = 1;
+		
+			size_t workCount = aVector.size() / context.m_itemCountPerWork;
+			
+			if(workCount * context.m_itemCountPerWork < aVector.size())
+				context.m_itemCountPerWorkRemainder = aVector.size() - workCount * context.m_itemCountPerWork;
+
+			size_t workIndex = 0;
 
 			for(size_t i = 0; i < workCount; i++)
 			{
-				size_t remaining = aVector.size() - workIndex;
-				size_t count = remaining < itemsPerWork ? remaining : itemsPerWork;
-				uint32_t header = MakeHeader(TYPE_FOR_EACH_VECTOR, i + 1 == workCount ? FOR_EACH_VECTOR_FLAG_LAST : 0);
-
+				uint32_t header = MakeHeader(TYPE_FOR_EACH_VECTOR, 0);
 				PostPacket({ header, (void*)&aVector[workIndex], (void*)&context });
-
-				workIndex += count;
+				workIndex += context.m_itemCountPerWork;
 			}
 
-			for(;;)
-				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			if(context.m_itemCountPerWorkRemainder > 0)
+			{
+				uint32_t header = MakeHeader(TYPE_FOR_EACH_VECTOR, FOR_EACH_VECTOR_FLAG_REMAINDER);
+				PostPacket({ header, (void*)&aVector[workIndex], (void*)&context });
+				workCount++;
+			}
 
+			for(size_t i = 0;  i < workCount; i++)
+				semaphore.acquire();
 		}
+
+		// Data access
+		#if defined(WIN32)
+			HANDLE	GetIOCPHandle() { return m_iocpHandle; }
+		#else
+			int		GetEpollFd() { return m_epollFd; }
+		#endif
 
 	private:		
 
-		size_t											m_concurrency;
+		size_t											m_forEachConcurrency = 1;
+		IOFunction										m_ioFunction;
 
 		#if defined(WIN32)
 			Win32Handle									m_iocpHandle;
+		#else	
+			int											m_eventFd = 0;
+			int											m_epollFd = 0;
+
+			struct Internal;
+			Internal*									m_internal = NULL;
 		#endif
 
 		struct DummyClass
@@ -106,12 +157,19 @@ namespace nwork
 
 		};
 
-		struct ForEachContext
+		struct ForEachVectorContext
 		{
-			size_t									m_itemSize = 0;
-			size_t									m_itemCountPerWork = 0;
-			size_t									m_itemCountPerWorkLast = 0;
-			std::function<void(const DummyClass&)>* m_function = NULL;
+			size_t										m_itemSize = 0;
+			size_t										m_itemCountPerWork = 0;
+			size_t										m_itemCountPerWorkRemainder = 0;
+			std::function<void(const DummyClass&)>*		m_function = NULL;
+			std::counting_semaphore<>*					m_semaphore = NULL;
+		};
+
+		struct ForEachInRangeContext
+		{
+			std::function<void(int32_t)>*				m_function = NULL;
+			std::counting_semaphore<>*					m_semaphore = NULL;
 		};
 
 		WaitResult	_WaitForPacket(

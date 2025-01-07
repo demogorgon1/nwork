@@ -6,9 +6,11 @@
 
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <chrono>
 #include <functional>
+#include <semaphore>
 #include <thread>
 
 #if defined(WIN32)

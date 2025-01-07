@@ -22,6 +22,8 @@ include(GNUInstallDirs)
 
 # -------------------
 
+include_directories(extra)
+
 if(MSVC)
 	add_compile_options(/bigobj /MP)
 endif()
