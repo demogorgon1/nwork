@@ -7,6 +7,8 @@ and will allow you to post basically anything to be picked up by a worker thread
 In the ```extra/``` sub-directory you'll find the excellent [concurrentqueue](https://github.com/cameron314/concurrentqueue/) library, which is used by the Linux version of *nwork*. Epoll is essentially just a fancy semaphore and you need to bring your own queue data structure. IOCP, on the other hand, comes with its
 own queue. 
 
+Note that there might be some missing parts as this project contains some copy-paste work from another project. It's used by my game project [Trolddom](https://trolddom.com) and will be updated to fit the needs that come from there.
+
 ## Usage
 First of all you'll need git and cmake to acquire and build the project. Then you can run:
 
