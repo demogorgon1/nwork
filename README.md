@@ -4,7 +4,7 @@ So far so good. But what if you want to use the same pool of worker threads for 
 and will allow you to post basically anything to be picked up by a worker thread. *nwork* is a simple library that wraps this functionality.
 
 ## Details
-In the ```extra/``` sub-directory you'll find the excellent [concurrentqueue]([https://trolddom.com](https://github.com/cameron314/concurrentqueue/) library, which is used by the Linux version of *nwork*. Epoll is essentially just a fancy semaphore and you need to bring your own queue data structure. IOCP, on the other hand, comes with its
+In the ```extra/``` sub-directory you'll find the excellent [concurrentqueue]([https://github.com/cameron314/concurrentqueue/] library, which is used by the Linux version of *nwork*. Epoll is essentially just a fancy semaphore and you need to bring your own queue data structure. IOCP, on the other hand, comes with its
 own queue. 
 
 ## Usage
