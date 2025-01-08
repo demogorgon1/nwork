@@ -2,6 +2,8 @@
 
 #if defined(WIN32)
 	#include <windows.h>
+#else
+	#include <unistd.h>
 #endif
 
 #include <assert.h>
@@ -13,10 +15,10 @@
 #include <semaphore>
 #include <thread>
 
-#if defined(WIN32)
+namespace nwork
+{
 
-	namespace nwork
-	{
+	#if defined(WIN32)
 
 		class Win32Handle
 		{
@@ -64,7 +66,22 @@
 			HANDLE	m_handle;
 		};
 
-	}
+		inline size_t 
+		GetCPUCount()
+		{
+			SYSTEM_INFO si;
+			GetSystemInfo(&si);
+			return (size_t)si.dwNumberOfProcessors;
+		}
 
+	#else
+	
+		inline size_t 
+		GetCPUCount()
+		{
+			return (size_t)sysconf(_SC_NPROCESSORS_ONLN);
+		}
 
-#endif
+	#endif
+
+}

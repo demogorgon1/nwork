@@ -69,6 +69,9 @@ namespace nwork
 		if(IsFixedSize() && m_size == 0)
 			return;
 
+		if(!IsFixedSize() && m_posted == 0)
+			return;
+
 		if(m_posted > 0 && m_size == 0)
 			OnAllPosted();
 

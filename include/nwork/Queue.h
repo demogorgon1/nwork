@@ -70,7 +70,7 @@ namespace nwork
 									const Packet&							aPacket);
 		WaitResult				WaitAndExecute(
 									uint32_t								aMaxWaitTime);
-		void					BlockingForEachInRange(
+		void					ForEachInRange(
 									int32_t									aMin,
 									int32_t									aMax,
 									std::function<void(int32_t)>			aFunction);
@@ -92,47 +92,32 @@ namespace nwork
 
 		template <typename _T>
 		void
-		BlockingForEachVector(
+		ForEachVector(
 			const std::vector<_T>&											aVector,
 			std::function<void(const _T&)>									aFunction)
 		{
 			if(aVector.empty())
 				return;
 
-			std::counting_semaphore<> semaphore(0); 
+			ForEachVectorContext context;
+			context.m_itemSize = sizeof(_T);
+			context.m_function = (std::function<void(const DummyClass&)>*)&aFunction;
+			_ForEachVector(&context, &aVector[0], aVector.size());
+		}
+
+		template <typename _T>
+		void
+		ForEachVector(
+			std::vector<_T>&												aVector,
+			std::function<void(_T&)>										aFunction)
+		{
+			if(aVector.empty())
+				return;
 
 			ForEachVectorContext context;
 			context.m_itemSize = sizeof(_T);
 			context.m_function = (std::function<void(const DummyClass&)>*)&aFunction;
-			context.m_semaphore = &semaphore;
-			context.m_itemCountPerWork = aVector.size() / m_forEachConcurrency;
-			
-			if(context.m_itemCountPerWork == 0)
-				context.m_itemCountPerWork = 1;
-		
-			size_t workCount = aVector.size() / context.m_itemCountPerWork;
-			
-			if(workCount * context.m_itemCountPerWork < aVector.size())
-				context.m_itemCountPerWorkRemainder = aVector.size() - workCount * context.m_itemCountPerWork;
-
-			size_t workIndex = 0;
-
-			for(size_t i = 0; i < workCount; i++)
-			{
-				uint32_t header = MakeHeader(TYPE_FOR_EACH_VECTOR, 0);
-				PostPacket({ header, (void*)&aVector[workIndex], (void*)&context });
-				workIndex += context.m_itemCountPerWork;
-			}
-
-			if(context.m_itemCountPerWorkRemainder > 0)
-			{
-				uint32_t header = MakeHeader(TYPE_FOR_EACH_VECTOR, FOR_EACH_VECTOR_FLAG_REMAINDER);
-				PostPacket({ header, (void*)&aVector[workIndex], (void*)&context });
-				workCount++;
-			}
-
-			for(size_t i = 0;  i < workCount; i++)
-				semaphore.acquire();
+			_ForEachVector(&context, &aVector[0], aVector.size());
 		}
 
 		// Data access
@@ -178,8 +163,12 @@ namespace nwork
 		};
 
 		WaitResult	_WaitForPacket(
-						uint32_t		aMaxWaitTime,
-						Packet&			aOut);
+						uint32_t				aMaxWaitTime,
+						Packet&					aOut);
+		void		_ForEachVector(
+						ForEachVectorContext*	aContext,
+						void*					aVectorBase,
+						size_t					aVectorSize);
 
 
 	};

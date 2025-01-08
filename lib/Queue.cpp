@@ -47,6 +47,7 @@ namespace nwork
 	//------------------------------------------------------------------------------------------------
 
 	Queue::Queue()
+		: m_forEachConcurrency(GetCPUCount() * 2)
 	{
 		#if defined(WIN32)
 			{
@@ -56,12 +57,6 @@ namespace nwork
 					NULL,
 					0);
 				assert(m_iocpHandle);
-			}
-
-			{
-				SYSTEM_INFO si;
-				GetSystemInfo(&si);
-				m_forEachConcurrency = (size_t)si.dwNumberOfProcessors * 2;
 			}
 		#else
 			m_internal = new Internal();
@@ -122,6 +117,7 @@ namespace nwork
 			assert(m_iocpHandle);
 
 			BOOL ok = PostQueuedCompletionStatus(m_iocpHandle, (DWORD)aPacket.m_header, (ULONG_PTR)aPacket.m_pointer1, (LPOVERLAPPED)aPacket.m_pointer2);
+			(void)ok;
 			assert(ok != 0);
 		#else
 			assert(m_eventFd != 0);
@@ -235,7 +231,7 @@ namespace nwork
 	}
 
 	void					
-	Queue::BlockingForEachInRange(
+	Queue::ForEachInRange(
 		int32_t									aMin,
 		int32_t									aMax,
 		std::function<void(int32_t)>			aFunction)
@@ -426,6 +422,47 @@ namespace nwork
 
 			return WAIT_RESULT_OK;
 		#endif
+	}
+
+	void		
+	Queue::_ForEachVector(
+		ForEachVectorContext*	aContext,
+		void*					aVectorBase,
+		size_t					aVectorSize)
+	{
+		assert(aVectorSize > 0);
+
+		std::counting_semaphore<> semaphore(0);
+
+		aContext->m_semaphore = &semaphore;
+		aContext->m_itemCountPerWork = aVectorSize / m_forEachConcurrency;
+
+		if (aContext->m_itemCountPerWork == 0)
+			aContext->m_itemCountPerWork = 1;
+
+		size_t workCount = aVectorSize / aContext->m_itemCountPerWork;
+
+		if (workCount * aContext->m_itemCountPerWork < aVectorSize)
+			aContext->m_itemCountPerWorkRemainder = aVectorSize - workCount * aContext->m_itemCountPerWork;
+
+		uint8_t* p = (uint8_t*)aVectorBase;
+
+		for (size_t i = 0; i < workCount; i++)
+		{
+			uint32_t header = MakeHeader(TYPE_FOR_EACH_VECTOR, 0);
+			PostPacket({ header, (void*)p, (void*)aContext });
+			p += aContext->m_itemSize * aContext->m_itemCountPerWork;
+		}
+
+		if (aContext->m_itemCountPerWorkRemainder > 0)
+		{
+			uint32_t header = MakeHeader(TYPE_FOR_EACH_VECTOR, FOR_EACH_VECTOR_FLAG_REMAINDER);
+			PostPacket({ header, (void*)p, (void*)aContext });
+			workCount++;
+		}
+
+		for (size_t i = 0; i < workCount; i++)
+			semaphore.acquire();
 	}
 
 }

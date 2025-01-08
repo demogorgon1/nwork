@@ -30,7 +30,7 @@ namespace nwork_test
 			std::mutex valuesLock;
 			std::unordered_set<int32_t> values;
 
-			aWorkQueue->BlockingForEachInRange(aMin, aMax, [&](
+			aWorkQueue->ForEachInRange(aMin, aMax, [&](
 				int32_t aValue)
 			{
 				std::lock_guard lock(valuesLock);
@@ -57,7 +57,7 @@ namespace nwork_test
 			std::mutex valuesLock;
 			std::unordered_set<uint32_t> values;
 
-			aWorkQueue->BlockingForEachVector<uint32_t>(testVector, [&](
+			aWorkQueue->ForEachVector<uint32_t>(testVector, [&](
 				const uint32_t& aItem)
 			{
 				std::lock_guard lock(valuesLock);

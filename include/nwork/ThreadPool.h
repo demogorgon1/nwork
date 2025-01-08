@@ -10,7 +10,7 @@ namespace nwork
 	public:
 		ThreadPool(
 			Queue*				aWorkQueue,
-			size_t				aNumThreads);
+			size_t				aNumThreads = 0);
 		~ThreadPool();
 
 	private:
