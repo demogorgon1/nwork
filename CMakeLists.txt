@@ -26,6 +26,7 @@ include_directories(extra)
 
 if(MSVC)
 	add_compile_options(/bigobj /MP)
+	add_compile_definitions(_ITERATOR_DEBUG_LEVEL=0)	
 endif()
 
 add_subdirectory(lib)
