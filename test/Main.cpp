@@ -80,7 +80,7 @@ namespace nwork_test
 				std::mutex valuesLock;
 				std::unordered_set<uint32_t> values;
 
-				for (size_t i = 0; i < 10; i++)
+				for (size_t i = 0; i < 1000; i++)
 				{
 					aWorkQueue->PostFunction([&, i]()
 					{
@@ -92,14 +92,16 @@ namespace nwork_test
 
 				for(;;)
 				{
-					std::lock_guard lock(valuesLock);
-					if(values.size() == 10)
-						break;
+					{
+						std::lock_guard lock(valuesLock);
+						if (values.size() == 1000)
+							break;
+					}
 
 					std::this_thread::sleep_for(std::chrono::milliseconds(10));
 				}
 
-				for(size_t i = 0; i < 10; i++)
+				for(size_t i = 0; i < 1000; i++)
 					assert(values.contains(i));
 			}
 
@@ -180,6 +182,196 @@ namespace nwork_test
 			assert(testObject.m_beforePostCalled);
 			assert(testObject.m_executeWorkCalled);
 		}
+
+		void
+		_TestForEach(
+			nwork::Queue*				aWorkQueue)
+		{
+			std::mt19937 random(1234);
+
+			for (size_t i = 1; i <= 16; i++)
+			{
+				aWorkQueue->SetForEachConcurrency(i);
+
+				{
+					_TestForEachInRange(aWorkQueue, 0, 0);
+
+					for (size_t j = 0; j < 100; j++)
+					{
+						int32_t rangeMin = 0;
+						int32_t rangeMax = 0;
+						_MakeRandomRange(random, rangeMin, rangeMax);
+						_TestForEachInRange(aWorkQueue, rangeMin, rangeMax);
+					}
+				}
+
+				for (size_t j = 0; j < 100; j++)
+					_TestForEachVector(aWorkQueue, j);
+			}
+		}
+
+		void
+		_TestGroups(
+			nwork::Queue*				aWorkQueue)
+		{
+			// Stack, non-fixed size
+			{
+				std::atomic_bool fA = false;
+				std::atomic_bool fB = false;
+				std::atomic_bool fC = false;
+
+				nwork::Group group;
+				
+				aWorkQueue->PostFunctionWithGroup(&group, [&]()
+				{
+					assert(!fA);
+					fA = true;
+				});
+
+				aWorkQueue->PostFunctionWithGroup(&group, [&]()
+				{
+					assert(!fB);
+					fB = true;
+				});
+
+				aWorkQueue->PostFunctionWithGroup(&group, [&]()
+				{
+					assert(!fC);
+					fC = true;
+				});
+
+				group.Wait();
+
+				assert(fA && fB && fC);
+			}
+
+			// Ref-counted, non-fixed size
+			{
+				std::atomic_bool fA = false;
+				std::atomic_bool fB = false;
+				std::atomic_bool fC = false;
+
+				nwork::Reference<nwork::Group> group(nwork::Group::NewReferenceCounted());
+				
+				aWorkQueue->PostFunctionWithGroup(group, [&]()
+				{
+					assert(!fA);
+					fA = true;
+				});
+
+				aWorkQueue->PostFunctionWithGroup(group, [&]()
+				{
+					assert(!fB);
+					fB = true;
+				});
+
+				aWorkQueue->PostFunctionWithGroup(group, [&]()
+				{
+					assert(!fC);
+					fC = true;
+				});
+
+				group->Wait();
+
+				assert(fA && fB && fC);
+			}
+
+			// Ref-counted, fixed size, with completion function
+			{
+				std::atomic_bool f = false;
+				std::binary_semaphore allCompleted(0);
+
+				{
+					nwork::Reference<nwork::Group> group(nwork::Group::NewReferenceCounted(nwork::Group::FLAG_FIXED_SIZE, 1));
+
+					group->SetCompletionFunction([&]()
+					{
+						allCompleted.release();
+					});
+
+					aWorkQueue->PostFunctionWithGroup(group, [&]()
+					{
+						assert(!f);
+						f = true;
+					});
+				}
+
+				allCompleted.acquire();
+
+				assert(f);
+			}
+		}
+
+		void
+		_TestReferences()
+		{
+			struct TestObject
+			{
+				void
+				AddReference()
+				{
+					m_refCount++;
+				}
+
+				void
+				RemoveReference()
+				{
+					if(--m_refCount == 0)
+					{
+						assert(!m_deleted);
+						m_deleted = true;
+					}
+				}
+
+				uint32_t				m_refCount = 0;
+				bool					m_deleted = false;
+			};
+
+			{
+				TestObject x;
+
+				{
+					nwork::Reference<TestObject> p(&x);
+					assert(!x.m_deleted);
+					assert(x.m_refCount == 1);
+				}
+
+				assert(x.m_deleted);
+			}
+
+			{
+				TestObject x;
+
+				{
+					nwork::Reference<TestObject> p(&x);
+					assert(!x.m_deleted);
+					assert(x.m_refCount == 1);
+
+					nwork::Reference<TestObject> a = p;
+					assert(!x.m_deleted);
+					assert(x.m_refCount == 2);
+
+					assert(a == p);
+					a.Release();
+
+					assert(!x.m_deleted);
+					assert(x.m_refCount == 1);
+
+					assert(a.IsNull());
+					assert(!p.IsNull());
+
+					nwork::Reference<TestObject> b = std::move(p);
+					assert(!x.m_deleted);
+					assert(x.m_refCount == 1);
+
+					assert(!b.IsNull());
+					assert(p.IsNull());
+				}
+
+				assert(x.m_deleted);
+			}
+
+		}
 	}
 
 	void
@@ -188,32 +380,12 @@ namespace nwork_test
 		{
 			nwork::Queue workQueue;
 			nwork::ThreadPool threadPool(&workQueue, 8);
-			std::mt19937 random(1234);
 
-			// Test ForEachInRange and ForEachVector
-			for(size_t i = 1; i <= 16; i++)
-			{
-				workQueue.SetForEachConcurrency(i);
-
-				{
-					_TestForEachInRange(&workQueue, 0, 0);
-
-					for (size_t j = 0; j < 100; j++)
-					{
-						int32_t rangeMin = 0;
-						int32_t rangeMax = 0;
-						_MakeRandomRange(random, rangeMin, rangeMax);
-						_TestForEachInRange(&workQueue, rangeMin, rangeMax);
-					}
-				}
-
-				for(size_t j = 0; j < 100; j++)
-					_TestForEachVector(&workQueue, j);
-			}
-
-			// Other tests
 			_TestFunctions(&workQueue);
 			_TestObjects(&workQueue);
+			_TestForEach(&workQueue);
+			_TestGroups(&workQueue);
+			_TestReferences();
 		}
 	}
 

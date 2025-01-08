@@ -1,5 +1,7 @@
 #include "Pcheader.h"
 
+#include <nwork/Group.h>
+#include <nwork/Object.h>
 #include <nwork/Queue.h>
 
 namespace nwork
@@ -38,6 +40,7 @@ namespace nwork
 		struct Queue::Internal
 		{
 			moodycamel::ConcurrentQueue<Packet>		m_concurrentQueue;
+			std::atomic_size_t						m_queueLength = 0;
 		};
 	#endif
 
@@ -124,6 +127,7 @@ namespace nwork
 			assert(m_eventFd != 0);
 
 			m_internal->m_concurrentQueue.enqueue(aPacket);
+			m_internal->m_queueLength++;
 
 			uint64_t v = 1;
 			ssize_t bytes = write(m_eventFd, &v, sizeof(v));
@@ -189,8 +193,19 @@ namespace nwork
 
 					if(packet.m_pointer2 != NULL)
 					{
-						std::counting_semaphore<>* semaphore = (std::counting_semaphore<>*)packet.m_pointer2;
-						semaphore->release();
+						if(packet.m_header & FUNCTION_FLAG_GROUP)
+						{
+							Group* group = (Group*)packet.m_pointer2;
+							group->OnCompletion();
+
+							if(group->IsReferenceCounted())
+								group->RemoveReference();
+						}
+						else
+						{
+							std::counting_semaphore<>* semaphore = (std::counting_semaphore<>*)packet.m_pointer2;
+							semaphore->release();
+						}
 					}
 				}					
 				break;
@@ -290,6 +305,26 @@ namespace nwork
 	}
 
 	void					
+	Queue::PostFunctionWithGroup(
+		Group*									aGroup,
+		std::function<void()>					aFunction)
+	{	
+		if(aGroup->IsReferenceCounted())
+			aGroup->AddReference();
+
+		aGroup->OnPost();
+
+		std::function<void()>* f = new std::function<void()>();
+		*f = std::move(aFunction);
+
+		Packet packet;
+		packet.m_header = MakeHeader(TYPE_FUNCTION, FUNCTION_FLAG_DELETE | FUNCTION_FLAG_GROUP);
+		packet.m_pointer1 = (void*)f;
+		packet.m_pointer2 = (void*)aGroup;
+		PostPacket(packet);
+	}
+
+	void					
 	Queue::PostFunctionPointer(
 		std::function<void()>*					aFunction)
 	{
@@ -375,8 +410,14 @@ namespace nwork
 				if(bytes < 0)
 					return WAIT_RESULT_TIMED_OUT;
 
-				if(!m_internal->m_concurrentQueue.try_dequeue(aOut))
-					return WAIT_RESULT_TIMED_OUT;
+				while(m_internal->m_queueLength > 0)
+				{
+					if(m_internal->m_concurrentQueue.try_dequeue(aOut))
+						break;
+				}
+
+				assert(m_internal->m_queueLength > 0);
+				m_internal->m_queueLength--;
 			}
 			else
 			{

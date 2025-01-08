@@ -1,9 +1,10 @@
 #pragma once
 
-#include "Object.h"
-
 namespace nwork
 {
+
+	class Group;
+	class Object;
 	
 	class Queue
 	{
@@ -30,7 +31,8 @@ namespace nwork
 
 		enum FunctionFlag : uint32_t
 		{
-			FUNCTION_FLAG_DELETE			= 0x40000000
+			FUNCTION_FLAG_DELETE			= 0x40000000,
+			FUNCTION_FLAG_GROUP				= 0x80000000
 		};
 
 		struct Packet
@@ -76,6 +78,9 @@ namespace nwork
 									std::function<void()>					aFunction);
 		void					PostFunctionWithSemaphore(
 									std::counting_semaphore<>*				aSemaphore,
+									std::function<void()>					aFunction);
+		void					PostFunctionWithGroup(
+									Group*									aGroup,
 									std::function<void()>					aFunction);
 		void					PostFunctionPointer(
 									std::function<void()>*					aFunction);
