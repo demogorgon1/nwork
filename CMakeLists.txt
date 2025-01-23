@@ -16,6 +16,8 @@ endmacro()
 
 nwork_option(NWORK_PRECOMPILED_HEADERS "Enable precompiled headers." ON)
 nwork_option(NWORK_DISABLE_WARNING_CLASS_MEMACCESS "-Wno-class-memaccess" ON)
+nwork_option(NWORK_TEST "Builds tests." ON)
+nwork_option(NWORK_DISABLE_MSVC_ITERATOR_DEBUG "_ITERATOR_DEBUG_LEVEL=0" ON)
 
 include(FetchContent)
 include(GNUInstallDirs)
@@ -26,11 +28,17 @@ include_directories(extra)
 
 if(MSVC)
 	add_compile_options(/bigobj /MP)
-	add_compile_definitions(_ITERATOR_DEBUG_LEVEL=0)	
+
+	if(NWORK_DISABLE_MSVC_ITERATOR_DEBUG)
+		add_compile_definitions(_ITERATOR_DEBUG_LEVEL=0)	
+	endif()
 endif()
 
 add_subdirectory(lib)
 add_subdirectory(include)
-add_subdirectory(test)
+
+if(NWORK_TEST)
+	add_subdirectory(test)
+endif()
 
 
