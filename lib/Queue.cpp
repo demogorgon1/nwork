@@ -77,6 +77,7 @@ namespace nwork
 
 				int result = epoll_ctl(m_epollFd, EPOLL_CTL_ADD, m_eventFd, &t);
 				assert(result == 0);
+				(void)result;
 			}
 		#endif
 	}
@@ -128,6 +129,7 @@ namespace nwork
 			uint64_t v = 1;
 			ssize_t bytes = write(m_eventFd, &v, sizeof(v));
 			assert(bytes == sizeof(v));
+			(void)bytes;
 		#endif
 	}
 
