@@ -21,6 +21,9 @@ namespace nwork
 							uint32_t				aSize = 0);
 						~Group();
 
+						Group(const Group&) = delete;
+		Group&			operator=(const Group&) = delete;
+
 		void			OnCompletion();
 		void			OnPost();
 		void			OnAllPosted();
@@ -37,10 +40,16 @@ namespace nwork
 	private:
 
 		uint32_t				m_flags;
+		uint32_t				m_size;
 
+		// Only touched by the posting thread
 		uint32_t				m_posted;
-		std::atomic_uint32_t	m_size;
-		std::atomic_uint32_t	m_completed;
+		bool					m_allPosted;
+
+		// Work that hasn't completed yet. If not fixed size, it also includes one for not having called OnAllPosted() yet,
+		// so it can't reach zero before everything has been posted. Whoever brings it to zero completes the group.
+		std::atomic_uint32_t	m_pending;
+
 		std::binary_semaphore	m_event;
 		std::function<void()>	m_completionFunction;
 

@@ -18,7 +18,11 @@ namespace nwork
 			std::unique_ptr<std::thread> t = std::make_unique<std::thread>([&, aWorkQueue]()
 			{
 				while (!m_stop)
-					aWorkQueue->WaitAndExecute(100);
+				{
+					// Don't spin if the queue is broken
+					if(aWorkQueue->WaitAndExecute(100) == Queue::WAIT_RESULT_ERROR)
+						std::this_thread::sleep_for(std::chrono::milliseconds(100));
+				}
 			});
 
 			m_threads.push_back(std::move(t));

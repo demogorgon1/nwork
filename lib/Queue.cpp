@@ -10,6 +10,26 @@ namespace nwork
 	namespace
 	{
 
+		// Queue whose work is being executed by this thread
+		thread_local Queue* t_executingQueue = NULL;
+
+		struct ExecutingQueueScope
+		{
+			ExecutingQueueScope(
+				Queue*															aQueue)
+				: m_previous(t_executingQueue)
+			{
+				t_executingQueue = aQueue;
+			}
+
+			~ExecutingQueueScope()
+			{
+				t_executingQueue = m_previous;
+			}
+
+			Queue*	m_previous;
+		};
+
 		uint64_t
 		_MakeInt32Range(
 			int32_t															aMin,
@@ -81,9 +101,19 @@ namespace nwork
 			}
 		#endif
 	}
-	
+
 	Queue::~Queue()
 	{
+		// Get rid of work that never got executed
+		{
+			Packet packet;
+			while(_WaitForPacket(0, packet) == WAIT_RESULT_OK)
+			{
+				_DiscardPacket(packet);
+				packet = Packet();
+			}
+		}
+
 		#if !defined(WIN32)
 			delete m_internal;
 
@@ -95,7 +125,7 @@ namespace nwork
 		#endif
 	}
 
-	void					
+	void
 	Queue::SetForEachConcurrency(
 		size_t				aForEachConcurrency)
 	{
@@ -103,7 +133,7 @@ namespace nwork
 		m_forEachConcurrency = aForEachConcurrency;
 	}
 
-	void					
+	void
 	Queue::SetIOFunction(
 		IOFunction			aIOFunction)
 	{
@@ -121,7 +151,7 @@ namespace nwork
 			(void)ok;
 			assert(ok != 0);
 		#else
-			assert(m_eventFd != 0);
+			assert(m_eventFd >= 0);
 
 			m_internal->m_concurrentQueue.enqueue(aPacket);
 			m_internal->m_queueLength++;
@@ -142,97 +172,13 @@ namespace nwork
 		if(result != WAIT_RESULT_OK)
 			return result;
 
-		uint32_t size = packet.m_header & 0x0FFFFFFF;
-			
-		if(size == 0x0FFFFFFF)
-		{
-			Type type = (Type)(packet.m_header & 0x30000000);			
+		ExecutingQueueScope executingQueueScope(this);
+		_ExecutePacket(packet);
 
-			switch(type)
-			{
-			case TYPE_FOR_EACH_VECTOR:
-				{
-					const uint8_t* base = (const uint8_t*)packet.m_pointer1;
-					const ForEachVectorContext* forEachContext = (const ForEachVectorContext*)packet.m_pointer2;
-					size_t itemCount = (packet.m_header & FOR_EACH_VECTOR_FLAG_REMAINDER) != 0 ? forEachContext->m_itemCountPerWorkRemainder : forEachContext->m_itemCountPerWork;
-
-					for (size_t i = 0; i < itemCount; i++)
-					{
-						const DummyClass* p = (const DummyClass*)(base + forEachContext->m_itemSize * i);
-						forEachContext->m_function->operator()(*p);
-					}
-
-					forEachContext->m_semaphore->release();
-				}
-				break;
-
-			case TYPE_FOR_EACH_IN_RANGE:
-				{
-					uint64_t range = reinterpret_cast<uint64_t>(packet.m_pointer1);
-					const ForEachInRangeContext* forEachContext = (const ForEachInRangeContext*)packet.m_pointer2;
-					int32_t workMin = _ExtractInt32RangeMin(range);
-					int32_t workMax = _ExtractInt32RangeMax(range);
-
-					for(int32_t i = workMin; i <= workMax; i++)
-						forEachContext->m_function->operator()(i);
-
-					forEachContext->m_semaphore->release();
-				}
-				break;
-
-			case TYPE_FUNCTION:
-				{
-					std::function<void()>* p = (std::function<void()>*)packet.m_pointer1;
-					assert(p != NULL);
-					p->operator()();
-
-					if(packet.m_header & FUNCTION_FLAG_DELETE)
-						delete p;
-
-					if(packet.m_pointer2 != NULL)
-					{
-						if(packet.m_header & FUNCTION_FLAG_GROUP)
-						{
-							Group* group = (Group*)packet.m_pointer2;
-							group->OnCompletion();
-
-							if(group->IsReferenceCounted())
-								group->RemoveReference();
-						}
-						else
-						{
-							std::counting_semaphore<>* semaphore = (std::counting_semaphore<>*)packet.m_pointer2;
-							semaphore->release();
-						}
-					}
-				}					
-				break;
-
-			case TYPE_OBJECT:
-				{
-					Object* p = (Object*)packet.m_pointer1;
-					assert(p != NULL);
-					p->ExecuteWork();
-					p->AfterExecute();
-				}
-				break;
-	
-			default:
-				assert(false);
-			}
-
-		}
-		else
-		{
-			assert(m_ioFunction);
-
-			m_ioFunction(size, packet.m_pointer2);
-		}
-		
 		return WAIT_RESULT_OK;
 	}
 
-	void					
+	void
 	Queue::ForEachInRange(
 		int32_t									aMin,
 		int32_t									aMax,
@@ -253,7 +199,7 @@ namespace nwork
 
 		int32_t workCount = count / step;
 		int32_t workMin = aMin;
-		
+
 		for (int32_t i = 0; i < workCount; i++)
 		{
 			uint32_t header = MakeHeader(TYPE_FOR_EACH_IN_RANGE, 0);
@@ -270,11 +216,10 @@ namespace nwork
 			workCount++;
 		}
 
-		for (int32_t i = 0; i < workCount; i++)
-			semaphore.acquire();
+		_WaitForWork(semaphore, (size_t)workCount);
 	}
 
-	void					
+	void
 	Queue::PostFunction(
 		std::function<void()>					aFunction)
 	{
@@ -287,7 +232,7 @@ namespace nwork
 		PostPacket(packet);
 	}
 
-	void					
+	void
 	Queue::PostFunctionWithSemaphore(
 		std::counting_semaphore<>*				aSemaphore,
 		std::function<void()>					aFunction)
@@ -302,11 +247,11 @@ namespace nwork
 		PostPacket(packet);
 	}
 
-	void					
+	void
 	Queue::PostFunctionWithGroup(
 		Group*									aGroup,
 		std::function<void()>					aFunction)
-	{	
+	{
 		if(aGroup->IsReferenceCounted())
 			aGroup->AddReference();
 
@@ -322,29 +267,29 @@ namespace nwork
 		PostPacket(packet);
 	}
 
-	void					
+	void
 	Queue::PostFunctionPointer(
 		std::function<void()>*					aFunction)
 	{
 		Packet packet;
-		packet.m_header = MakeHeader(TYPE_FUNCTION, FUNCTION_FLAG_DELETE);
+		packet.m_header = MakeHeader(TYPE_FUNCTION, 0);
 		packet.m_pointer1 = (void*)aFunction;
 		PostPacket(packet);
 	}
 
-	void					
+	void
 	Queue::PostFunctionPointerWithSemaphore(
 		std::counting_semaphore<>*				aSemaphore,
 		std::function<void()>*					aFunction)
 	{
 		Packet packet;
-		packet.m_header = MakeHeader(TYPE_FUNCTION, FUNCTION_FLAG_DELETE);
+		packet.m_header = MakeHeader(TYPE_FUNCTION, 0);
 		packet.m_pointer1 = (void*)aFunction;
 		packet.m_pointer2 = (void*)aSemaphore;
 		PostPacket(packet);
 	}
 
-	void					
+	void
 	Queue::PostObject(
 		Object*									aObject)
 	{
@@ -375,61 +320,174 @@ namespace nwork
 
 			if (ok == 0)
 			{
-				DWORD lastError = GetLastError();
+				// Failed I/O operation, which the I/O function still needs to know about
+				if (aOut.m_pointer2 != NULL)
+					return WAIT_RESULT_OK;
 
-				if (lastError == WAIT_TIMEOUT)
+				if (GetLastError() == WAIT_TIMEOUT)
 					return WAIT_RESULT_TIMED_OUT;
-				else if (lastError != ERROR_HANDLE_EOF)
-					return WAIT_RESULT_ERROR;
+
+				return WAIT_RESULT_ERROR;
 			}
 
 			return WAIT_RESULT_OK;
 		#else
-			assert(m_epollFd != 0);
-			assert(m_eventFd != 0);
+			assert(m_epollFd >= 0);
+			assert(m_eventFd >= 0);
 
 			struct epoll_event t;
-			
+
 			{
 				int result = epoll_wait(m_epollFd, &t, 1, aMaxWaitTime);
 				if (result == -1 && errno == EINTR)
 					return WAIT_RESULT_TIMED_OUT;
 
-				assert(result >= 0);
+				if (result < 0)
+					return WAIT_RESULT_ERROR;
 
 				if (result == 0)
 					return WAIT_RESULT_TIMED_OUT;
 			}
 
-			if (t.data.ptr == NULL)
-			{
-				uint64_t v = 0;
-				ssize_t bytes = read(m_eventFd, &v, sizeof(v));
-				if(bytes < 0)
-					return WAIT_RESULT_TIMED_OUT;
-
-				while(m_internal->m_queueLength > 0)
-				{
-					if(m_internal->m_concurrentQueue.try_dequeue(aOut))
-						break;
-				}
-
-				assert(m_internal->m_queueLength > 0);
-				m_internal->m_queueLength--;
-			}
-			else
+			if (t.data.ptr != NULL)
 			{
 				assert(false);
+				return WAIT_RESULT_ERROR;
 			}
+
+			uint64_t v = 0;
+			ssize_t bytes = read(m_eventFd, &v, sizeof(v));
+			if(bytes < 0)
+				return WAIT_RESULT_TIMED_OUT;
+
+			// Got a token, so the packet has been enqueued (but try_dequeue() can still fail while other threads are using the queue)
+			while(!m_internal->m_concurrentQueue.try_dequeue(aOut))
+				;
+
+			assert(m_internal->m_queueLength > 0);
+			m_internal->m_queueLength--;
 
 			return WAIT_RESULT_OK;
 		#endif
 	}
 
-	void		
+	void
+	Queue::_ExecutePacket(
+		const Packet&	aPacket)
+	{
+		uint32_t size = aPacket.m_header & 0x0FFFFFFF;
+
+		if(size == 0x0FFFFFFF)
+		{
+			Type type = (Type)(aPacket.m_header & 0x30000000);
+
+			switch(type)
+			{
+			case TYPE_FOR_EACH_VECTOR:
+				{
+					uint8_t* base = (uint8_t*)aPacket.m_pointer1;
+					const ForEachVectorContext* forEachContext = (const ForEachVectorContext*)aPacket.m_pointer2;
+					size_t itemCount = (aPacket.m_header & FOR_EACH_VECTOR_FLAG_REMAINDER) != 0 ? forEachContext->m_itemCountPerWorkRemainder : forEachContext->m_itemCountPerWork;
+
+					for (size_t i = 0; i < itemCount; i++)
+						forEachContext->m_invoke(forEachContext->m_function, base + forEachContext->m_itemSize * i);
+
+					forEachContext->m_semaphore->release();
+				}
+				break;
+
+			case TYPE_FOR_EACH_IN_RANGE:
+				{
+					uint64_t range = reinterpret_cast<uint64_t>(aPacket.m_pointer1);
+					const ForEachInRangeContext* forEachContext = (const ForEachInRangeContext*)aPacket.m_pointer2;
+					int32_t workMin = _ExtractInt32RangeMin(range);
+					int32_t workMax = _ExtractInt32RangeMax(range);
+
+					for(int32_t i = workMin; i <= workMax; i++)
+						forEachContext->m_function->operator()(i);
+
+					forEachContext->m_semaphore->release();
+				}
+				break;
+
+			case TYPE_FUNCTION:
+				{
+					std::function<void()>* p = (std::function<void()>*)aPacket.m_pointer1;
+					assert(p != NULL);
+					p->operator()();
+
+					if(aPacket.m_header & FUNCTION_FLAG_DELETE)
+						delete p;
+
+					if(aPacket.m_pointer2 != NULL)
+					{
+						if(aPacket.m_header & FUNCTION_FLAG_GROUP)
+						{
+							Group* group = (Group*)aPacket.m_pointer2;
+
+							// Must be checked first: if not reference counted, the group can be gone as soon as it's completed
+							bool isReferenceCounted = group->IsReferenceCounted();
+
+							group->OnCompletion();
+
+							if(isReferenceCounted)
+								group->RemoveReference();
+						}
+						else
+						{
+							std::counting_semaphore<>* semaphore = (std::counting_semaphore<>*)aPacket.m_pointer2;
+							semaphore->release();
+						}
+					}
+				}
+				break;
+
+			case TYPE_OBJECT:
+				{
+					Object* p = (Object*)aPacket.m_pointer1;
+					assert(p != NULL);
+					p->ExecuteWork();
+					p->AfterExecute();
+				}
+				break;
+
+			default:
+				assert(false);
+			}
+
+		}
+		else
+		{
+			assert(m_ioFunction);
+
+			m_ioFunction(size, aPacket.m_pointer2);
+		}
+	}
+
+	void
+	Queue::_DiscardPacket(
+		const Packet&	aPacket)
+	{
+		uint32_t size = aPacket.m_header & 0x0FFFFFFF;
+
+		if(size == 0x0FFFFFFF && (Type)(aPacket.m_header & 0x30000000) == TYPE_FUNCTION)
+		{
+			if(aPacket.m_header & FUNCTION_FLAG_DELETE)
+				delete (std::function<void()>*)aPacket.m_pointer1;
+
+			if(aPacket.m_pointer2 != NULL && (aPacket.m_header & FUNCTION_FLAG_GROUP) != 0)
+			{
+				Group* group = (Group*)aPacket.m_pointer2;
+				if(group->IsReferenceCounted())
+					group->RemoveReference();
+			}
+		}
+	}
+
+	void
 	Queue::_ForEachVector(
 		ForEachVectorContext*	aContext,
-		void*					aVectorBase,
+		uint8_t*				aVectorBase,
 		size_t					aVectorSize)
 	{
 		assert(aVectorSize > 0);
@@ -447,7 +505,7 @@ namespace nwork
 		if (workCount * aContext->m_itemCountPerWork < aVectorSize)
 			aContext->m_itemCountPerWorkRemainder = aVectorSize - workCount * aContext->m_itemCountPerWork;
 
-		uint8_t* p = (uint8_t*)aVectorBase;
+		uint8_t* p = aVectorBase;
 
 		for (size_t i = 0; i < workCount; i++)
 		{
@@ -463,8 +521,37 @@ namespace nwork
 			workCount++;
 		}
 
-		for (size_t i = 0; i < workCount; i++)
-			semaphore.acquire();
+		_WaitForWork(semaphore, workCount);
+	}
+
+	void
+	Queue::_WaitForWork(
+		std::counting_semaphore<>&	aSemaphore,
+		size_t						aCount)
+	{
+		if(t_executingQueue != this)
+		{
+			for (size_t i = 0; i < aCount; i++)
+				aSemaphore.acquire();
+			return;
+		}
+
+		// Called from work executed by this queue. Blocking would take a worker thread out of the pool and could deadlock
+		// if all of them did it, so execute other work while waiting.
+		while(aCount > 0)
+		{
+			if(aSemaphore.try_acquire())
+			{
+				aCount--;
+				continue;
+			}
+
+			Packet packet;
+			if(_WaitForPacket(0, packet) == WAIT_RESULT_OK)
+				_ExecutePacket(packet);
+			else if(aSemaphore.try_acquire_for(std::chrono::milliseconds(1)))
+				aCount--;
+		}
 	}
 
 }

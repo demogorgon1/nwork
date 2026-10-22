@@ -1,5 +1,6 @@
 #include "Pcheader.h"
 
+#include <memory>
 #include <mutex>
 #include <random>
 #include <unordered_set>
@@ -70,6 +71,40 @@ namespace nwork_test
 				assert(values.contains(i));
 
 			assert(values.size() == testVector.size());
+
+			// Const vector
+			{
+				const std::vector<uint32_t>& constTestVector = testVector;
+				std::atomic_size_t count = 0;
+
+				aWorkQueue->ForEachVector<uint32_t>(constTestVector, [&](
+					const uint32_t& /*aItem*/)
+				{
+					count++;
+				});
+
+				assert(count == constTestVector.size());
+			}
+		}
+
+		void
+		_TestNestedForEach(
+			nwork::Queue*				aWorkQueue)
+		{
+			// Every worker thread runs a ForEachInRange, which would deadlock if they blocked while waiting
+			std::atomic_uint32_t count = 0;
+
+			aWorkQueue->ForEachInRange(0, 63, [&](
+				int32_t /*aOuter*/)
+			{
+				aWorkQueue->ForEachInRange(0, 99, [&](
+					int32_t /*aInner*/)
+				{
+					count++;
+				});
+			});
+
+			assert(count == 64 * 100);
 		}
 		
 		void
@@ -117,6 +152,43 @@ namespace nwork_test
 				semaphore.acquire();
 				assert(x == 1234);
 			}
+
+			// Post the same function pointer several times, the caller owns it
+			{
+				std::counting_semaphore<> semaphore(0);
+				std::atomic_uint32_t x = 0;
+				std::function<void()> f = [&]()
+				{
+					x++;
+				};
+
+				for(uint32_t i = 0; i < 10; i++)
+					aWorkQueue->PostFunctionPointerWithSemaphore(&semaphore, &f);
+
+				for(uint32_t i = 0; i < 10; i++)
+					semaphore.acquire();
+
+				assert(x == 10);
+			}
+		}
+
+		void
+		_TestDiscardedWork()
+		{
+			// Queue destroyed without executing posted work, which must be freed
+			std::shared_ptr<int> p = std::make_shared<int>(0);
+
+			{
+				nwork::Queue workQueue;
+				workQueue.PostFunction([p]() { assert(false); });
+
+				nwork::Reference<nwork::Group> group(nwork::Group::NewReferenceCounted());
+				workQueue.PostFunctionWithGroup(group, [p]() { assert(false); });
+
+				assert(p.use_count() == 3);
+			}
+
+			assert(p.use_count() == 1);
 		}
 
 		void
@@ -301,6 +373,37 @@ namespace nwork_test
 
 				assert(f);
 			}
+
+			// Many small groups with work completing concurrently, the completion function must be called exactly once
+			for(uint32_t i = 0; i < 200000; i++)
+			{
+				bool fixedSize = (i % 2) == 0;
+				uint32_t workCount = 1 + i % 8;
+				std::atomic_uint32_t completionCount = 0;
+				std::atomic_uint32_t executedCount = 0;
+
+				{
+					nwork::Group group(fixedSize ? nwork::Group::FLAG_FIXED_SIZE : 0, fixedSize ? workCount : 0);
+
+					group.SetCompletionFunction([&]()
+					{
+						completionCount++;
+					});
+
+					for(uint32_t j = 0; j < workCount; j++)
+					{
+						aWorkQueue->PostFunctionWithGroup(&group, [&]()
+						{
+							executedCount++;
+						});
+					}
+
+					group.Wait();
+				}
+
+				assert(executedCount == workCount);
+				assert(completionCount == 1);
+			}
 		}
 
 		void
@@ -385,9 +488,12 @@ namespace nwork_test
 			_TestFunctions(&workQueue);
 			_TestObjects(&workQueue);
 			_TestForEach(&workQueue);
+			_TestNestedForEach(&workQueue);
 			_TestGroups(&workQueue);
 			_TestReferences();
 		}
+
+		_TestDiscardedWork();
 	}
 
 }

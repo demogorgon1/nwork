@@ -16,7 +16,7 @@ First of all you'll need git and cmake to acquire and build the project. Then yo
 git clone https://github.com/demogorgon1/nwork.git
 cd nwork
 mkdir build
-cd nwork
+cd build
 cmake ..
 cmake --build .
 ```

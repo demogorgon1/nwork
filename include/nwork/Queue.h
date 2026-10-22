@@ -42,6 +42,8 @@ namespace nwork
 			void*			m_pointer2 = NULL;
 		};
 		
+		// Called with the number of bytes transferred and the OVERLAPPED of a completed I/O operation. Failed operations are
+		// passed on too, the OVERLAPPED holds the status.
 		typedef std::function<void(uint32_t, void*)> IOFunction;
 
 		static uint32_t
@@ -61,6 +63,9 @@ namespace nwork
 
 								Queue();
 								~Queue();
+
+								Queue(const Queue&) = delete;
+		Queue&					operator=(const Queue&) = delete;
 
 		void					SetForEachConcurrency(
 									size_t									aForEachConcurrency);
@@ -82,6 +87,7 @@ namespace nwork
 		void					PostFunctionWithGroup(
 									Group*									aGroup,
 									std::function<void()>					aFunction);
+		// The caller owns the function, which must stay alive until it has been executed
 		void					PostFunctionPointer(
 									std::function<void()>*					aFunction);
 		void					PostFunctionPointerWithSemaphore(
@@ -101,8 +107,14 @@ namespace nwork
 
 			ForEachVectorContext context;
 			context.m_itemSize = sizeof(_T);
-			context.m_function = (std::function<void(const DummyClass&)>*)&aFunction;
-			_ForEachVector(&context, &aVector[0], aVector.size());
+			context.m_function = &aFunction;
+			context.m_invoke = [](
+				void*		aFunction,
+				uint8_t*	aItem)
+			{
+				(*(std::function<void(const _T&)>*)aFunction)(*(const _T*)aItem);
+			};
+			_ForEachVector(&context, (uint8_t*)aVector.data(), aVector.size());
 		}
 
 		template <typename _T>
@@ -116,8 +128,14 @@ namespace nwork
 
 			ForEachVectorContext context;
 			context.m_itemSize = sizeof(_T);
-			context.m_function = (std::function<void(const DummyClass&)>*)&aFunction;
-			_ForEachVector(&context, &aVector[0], aVector.size());
+			context.m_function = &aFunction;
+			context.m_invoke = [](
+				void*		aFunction,
+				uint8_t*	aItem)
+			{
+				(*(std::function<void(_T&)>*)aFunction)(*(_T*)aItem);
+			};
+			_ForEachVector(&context, (uint8_t*)aVector.data(), aVector.size());
 		}
 
 		// Data access
@@ -135,24 +153,20 @@ namespace nwork
 		#if defined(WIN32)
 			Win32Handle									m_iocpHandle;
 		#else	
-			int											m_eventFd = 0;
-			int											m_epollFd = 0;
+			int											m_eventFd = -1;
+			int											m_epollFd = -1;
 
 			struct Internal;
 			Internal*									m_internal = NULL;
 		#endif
-
-		struct DummyClass
-		{
-
-		};
 
 		struct ForEachVectorContext
 		{
 			size_t										m_itemSize = 0;
 			size_t										m_itemCountPerWork = 0;
 			size_t										m_itemCountPerWorkRemainder = 0;
-			std::function<void(const DummyClass&)>*		m_function = NULL;
+			void*										m_function = NULL;
+			void										(*m_invoke)(void*, uint8_t*) = NULL;
 			std::counting_semaphore<>*					m_semaphore = NULL;
 		};
 
@@ -163,13 +177,19 @@ namespace nwork
 		};
 
 		WaitResult	_WaitForPacket(
-						uint32_t				aMaxWaitTime,
-						Packet&					aOut);
+						uint32_t					aMaxWaitTime,
+						Packet&						aOut);
+		void		_ExecutePacket(
+						const Packet&				aPacket);
+		void		_DiscardPacket(
+						const Packet&				aPacket);
 		void		_ForEachVector(
-						ForEachVectorContext*	aContext,
-						void*					aVectorBase,
-						size_t					aVectorSize);
-
+						ForEachVectorContext*		aContext,
+						uint8_t*					aVectorBase,
+						size_t						aVectorSize);
+		void		_WaitForWork(
+						std::counting_semaphore<>&	aSemaphore,
+						size_t						aCount);
 
 	};
 

@@ -20,50 +20,56 @@ namespace nwork
 		uint32_t	aSize)
 		: m_flags(aFlags)
 		, m_size(aSize)
-		, m_completed(0)
-		, m_refCount(0)
 		, m_posted(0)
+		, m_allPosted(false)
+		, m_pending((aFlags & FLAG_FIXED_SIZE) != 0 ? aSize : 1)
 		, m_event(0)
+		, m_refCount(0)
 	{
-		
+		assert(IsFixedSize() || aSize == 0);
 	}
-	
+
 	Group::~Group()
 	{
 
 	}
 
-	void	
+	void
 	Group::OnCompletion()
 	{
-		m_completed++;
+		uint32_t pending = --m_pending;
+		assert(pending != UINT32_MAX);
 
-		if(m_size == m_completed)
+		if(pending == 0)
 			_OnAllCompleted();
 	}
 
 	void
 	Group::OnPost()
 	{
-		if(!IsFixedSize())
-		{
-			assert(m_size == 0);
-			m_posted++;
-		}
+		assert(!m_allPosted);
+
+		m_posted++;
+
+		if(IsFixedSize())
+			assert(m_posted <= m_size);
+		else
+			m_pending++;
 	}
 
-	void	
+	void
 	Group::OnAllPosted()
 	{
-		assert(m_size == 0);
+		assert(!IsFixedSize());
+		assert(!m_allPosted);
 
-		m_size = m_posted;
+		m_allPosted = true;
 
-		if(m_size == m_completed)
+		if(--m_pending == 0)
 			_OnAllCompleted();
 	}
 
-	void	
+	void
 	Group::Wait()
 	{
 		if(IsFixedSize() && m_size == 0)
@@ -72,7 +78,7 @@ namespace nwork
 		if(!IsFixedSize() && m_posted == 0)
 			return;
 
-		if(m_posted > 0 && m_size == 0)
+		if(!IsFixedSize() && !m_allPosted)
 			OnAllPosted();
 
 		m_event.acquire();

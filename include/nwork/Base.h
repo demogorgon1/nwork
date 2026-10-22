@@ -32,15 +32,21 @@ namespace nwork
 
 			~Win32Handle()
 			{
-				if (m_handle != NULL)
-					CloseHandle(m_handle);
+				_Close();
 			}
+
+			Win32Handle(const Win32Handle&) = delete;
+			Win32Handle& operator=(const Win32Handle&) = delete;
 
 			Win32Handle&
 			operator=(
 				HANDLE				aHandle)
 			{
-				m_handle = aHandle;
+				if (aHandle != m_handle)
+				{
+					_Close();
+					m_handle = aHandle;
+				}
 				return *this;
 			}
 
@@ -64,6 +70,13 @@ namespace nwork
 		private:
 
 			HANDLE	m_handle;
+
+			void
+			_Close()
+			{
+				if (m_handle != NULL && m_handle != INVALID_HANDLE_VALUE)
+					CloseHandle(m_handle);
+			}
 		};
 
 		inline size_t 
